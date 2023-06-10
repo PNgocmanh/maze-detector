@@ -1,7 +1,11 @@
+#include <PID_v1.h>
 #include <TimerOne.h>
 
-#include <PID_v1.h>
-#include <NewPing.h>
+#define STOP      0
+#define MOVEFORWARD   1
+#define TURNLEFT  2
+#define TURNRIGHT 3
+#define TURNBACK  4
 
 const int in1 = 4;
 const int in2 = 5;
@@ -13,74 +17,79 @@ const int echo1 = 9; // chân echo của HC-SR04 -> 1 H
 const int echo2 = 10; // chân echo của HC-SR04 -> 2 L
 const int echo3 = 11; // chân echo của HC-SR04 -> 3 R
 
+float diskslots = 20.00; 
+const float stepcount = 20.00;
+const float wheeldiameter = 60.00;
+
 const int encoderA = 2; // left
+volatile int pulse_left = 0;
 const int encoderB = 3; // right
-
-unsigned long previousMillis = 0;
-long interval = 1000;
-volatile boolean A_set = false;  // flag indicating the state of encoder pin A
-volatile boolean B_set = false;  // flag indicating the state of encoder pin B
-
-
-float speed;
-double lastoutput;
-double T = 0.01; // thoi gian lay mau
-double E, E1, E2;
-double alpha, beta, gamma;
-double Kp = 1;
-double Ki = 5;
-double Kd = 0.001;
+volatile int pulse_right = 0;
 
 const int distance_limit = 10 ; // cm
+int mang[100];
+int idx = 0;
+int dodai = 0;
 
-int distance_head;
-int distance_left;
-int distance_right;
+unsigned long PingTime[3];
+volatile int toComplete;
 
-volatile int pulse = 0;
-double error, error1, error2;
-double kp = 5 , ki = 1 , kd = 0.01 ,input = 0, output = 0, setpoint = 0;   // modify kp, ki and kd for optimal performance
-long temp;
-volatile long encoderPos = 0;
-PID myPID(&input, &output, &setpoint, kp, ki, kd, DIRECT);  // if motor will only run at full speed try 'REVERSE' instead of 'DIRECT'
+int distance_head = 0;
+int distance_left = 0;
+int distance_right = 0;
 
-void move_forward();
-void turn_left();
-void turn_right();
-void backward();
-void stop_motor();
-void readSensor();
-void actionMotor();
+const int echoPins[] = {9, 10, 11}; 
+volatile bool echoReceived[3] = {false};
+volatile unsigned long echoStartTimes[3];
+volatile unsigned long echoEndTimes[3];
+volatile unsigned long distance[3]; 
 
+       // Khai báo các biến PID
+double setpoint = 30.0;  // Giá trị mục tiêu
+double input, output;
+double Kp = 0.5, Ki = 0.5, Kd = 1.0;  // Hằng số PID
+PID myPID(&input, &output, &setpoint, Kp, Ki, Kd, DIRECT);
+
+
+// PID parameters
+double prevInput_left = 0;   // Previous input for derivative calculation
+double prevInput_right = 0;   // Previous input for derivative calculation
+double integral_left = 0;    // Integral term
+double derivative_left = 0;  // Derivative term
+double integral_right = 0;    // Integral term
+double derivative_right = 0;  // Derivative term
+double tocdoleft, tocdoright;
 // Initialize the encoder interrupt
-void motor(){
-  if (digitalRead(3) == LOW) {
-    pulse++;
-  } else {
-    pulse--;
-  }
+void doEncoderA(){
+  pulse_left++;
 }
 
-void encoder()  {                                     // pulse and direction, direct port reading to save cycles
-  if (PINB & 0b00000001)    encoderPos++;             // if (digitalRead(encodPinB1)==HIGH)  count ++;
-  else                      encoderPos--;             // if (digitalRead(encodPinB1)==LOW)   count --;
+void doEncoderB(){
+  pulse_right++;
 }
 
+double pid(int input, int setpoint, double kp, double ki, double kd, double integral, double derivative, double prevInput){
+  double error = setpoint - input;
+  derivative = input - prevInput;
+  integral += error;
+
+  double output = kp*error + ki*integral + kd*derivative;
+  output = constrain(output, 0, 255);
+  prevInput = input;
+  return output;
+}
 
 float getDistance(int trig, int echo){
   float distance = 0;
   unsigned long duration = 0;
-  pinMode(trig,OUTPUT);
-  
   /* Phát xung từ chân trig */
-  digitalWrite(trig, LOW);   // tắt chân trig
-  delayMicroseconds(2);
+//  digitalWrite(trig, LOW);   // tắt chân trig
+//  delayMicroseconds(2);
   digitalWrite(trig, HIGH);   // phát xung từ chân trig
   delayMicroseconds(10);   // xung có độ dài 5 microSeconds
   digitalWrite(trig, LOW);   // tắt chân trig
   /* Tính toán thời gian */
   // Đo độ rộng xung HIGH ở chân echo. 
-  pinMode(echo, INPUT);
   distance = pulseIn(echo, HIGH, 30000) / 58.0;  
   // Tính khoảng cách đến vật.
 //  distance = int(duration / 2 / 29.412); // duration * 0.0034 / 2.0; // duration/2/29.1
@@ -88,215 +97,350 @@ float getDistance(int trig, int echo){
   return distance;
 }
 
+// TimerOne ISR
+void ISR_timerone(){
+  Timer1.detachInterrupt(); // stop timer
+//  float rotation_left = (pulse_left/diskslots)*60.00; // calculator rpm left motor
+//  tocdoleft = pid(rotation_left, 120, 1, 3, 0.01, integral_left, derivative_left, prevInput_left);
+//  Serial.print("Motor speed left: ");
+//  Serial.println(tocdoleft);
+//  float rotation_right = (pulse_right/diskslots)*60.00; // calculator rpm left motor
+//  tocdoright = pid(rotation_right, 140, 1, 0.1, 0, integral_right, derivative_right, prevInput_right);
+//  Serial.print("Motor speed right: ");
+//  Serial.println(tocdoright);
+//  digitalWrite(in3, HIGH);
+//    analogWrite(in4, tocdoleft);
+//    digitalWrite(in1, HIGH);
+//     analogWrite(in2, tocdoright);
+  Serial.print("Motor speed left: ");
+  float rotation1 = (pulse_left/diskslots)*60.00; // calculator rpm left motor
+  Serial.print(rotation1);
+//  Serial.print(" RPM - ");
+  pulse_left = 0;
+  Serial.print("Motor speed right: ");
+  float rotation2 = (pulse_right/diskslots)*60.00; // calculator rpm left motor
+  Serial.print(rotation2);
+  Serial.println(" RPM");
+  pulse_right = 0;
+  Timer1.attachInterrupt(ISR_timerone); // enable the timer
+}
+
+// pIN change Interrupt
+ISR(PCINT0_vect) { //this ISR is common to every receiver channel, it is call everytime a change state occurs on a pins 8~13
+//    if (digitalRead(echoPins[0]) == HIGH) {
+//      echoStartTimes[0] = micros();
+//    } else {
+//      echoEndTimes[0] = micros();
+////      distance[0] = calculateDistance(0);
+//      echoReceived[0] = true;
+//    }
+
+}
+
+// Hàm đọc giá trị encoderCount
+int readEncoderCount() {
+  int count;
+  noInterrupts();
+  count = pulse_left;
+  interrupts();
+  return count;
+}
+
+void PingTrigger() {
+  digitalWrite(trig, LOW);
+  delayMicroseconds(2);
+  digitalWrite(trig, HIGH); // Trigger another pulse
+  delayMicroseconds(10);
+  digitalWrite(trig, LOW);
+}
+
+unsigned long calculateDistance(int sensorIndex) {
+  unsigned long duration = echoEndTimes[sensorIndex] - echoStartTimes[sensorIndex];
+  unsigned long distance = duration / 58;  // Divide by 58 to convert microseconds to centimeters
+  return distance;
+}
+
+void pciSetup(byte pin)
+{
+  pinMode(pin, INPUT);
+  *digitalPinToPCMSK(pin) |= bit (digitalPinToPCMSKbit(pin));  // enable pin
+  PCIFR  |= bit (digitalPinToPCICRbit(pin)); // clear any outstanding interrupt
+  PCICR  |= bit (digitalPinToPCICRbit(pin)); // enable interrupt for the group
+}
+
 void setup()
 {
   Serial.begin(9600);     // giao tiếp Serial với baudrate 9600
+//  tocdoleft = 0; tocdoright = 0;
+  
+  Timer1.initialize(1000000); // set timer for one second
+  
   pinMode(in1,OUTPUT);
   pinMode(in2,OUTPUT);
   pinMode(in3,OUTPUT);
   pinMode(in4,OUTPUT);
 
+//  PCICR |= B00000001;
+//  PCMSK0 |= B00001110;
+
   pinMode(trig,OUTPUT);   // chân trig sẽ phát tín hiệu
-  pinMode(echo1,INPUT);    // chân echo sẽ nhận tín hiệu
-  pinMode(echo2,INPUT);
-  pinMode(echo3,INPUT);
+  pciSetup(echo1);
+  pciSetup(echo2);
+  pciSetup(echo3);
+//  pinMode(echo1,INPUT);    // chân echo sẽ nhận tín hiệu
+//  pinMode(echo2,INPUT);
+//  pinMode(echo3,INPUT);
 
-  pinMode(encoderA, INPUT_PULLUP);
-  pinMode(encoderB, INPUT_PULLUP);
+  pinMode(2, INPUT);
+  pinMode(3, INPUT);
   
-  attachInterrupt(0, encoder, FALLING);               // update encoder position
-  TCCR1B = TCCR1B & 0b11111000 | 1;                   // set 31KHz PWM to prevent motor noise
+  attachInterrupt(0, doEncoderA, RISING);
+  attachInterrupt(1, doEncoderB, RISING);
+  Timer1.attachInterrupt(ISR_timerone);
+
+// Khởi tạo giá trị ban đầu cho PID
+  input = readEncoderCount();
   myPID.SetMode(AUTOMATIC);
-  myPID.SetSampleTime(1);
-  myPID.SetOutputLimits(-255, 255);
-
-  speed = 0; E = 0 ; E1 = 0; E2 = 0;
-  output = 0; lastoutput = 0;
-  attachInterrupt(0, encoder, FALLING);
-  Timer1.initialize(10000);
-  Timer1.attachInterrupt(PID);
-
-//  attachInterrupt(digitalPinToInterrupt(encoderA), updateEncoder, CHANGE);
-//  attachInterrupt(digitalPinToInterrupt(encoderB), updateEncoder, CHANGE);
-  
-
+  myPID.SetOutputLimits(-200, 200);  // Giới hạn tín hiệu điều khiển PWM (-255 đến 255)
+    
 }
 
 void loop()
-{  
-//    readSensor();
-//    actionMotor();
-//  digitalWrite(in1, LOW);
-//  analogWrite(in2, 100);
+{    
+
+//  unsigned long starttime, endtime, waitcount;
+//  waitcount = 0;
+//  starttime = millis();
+//  PingTrigger();
+//  while (echoReceived[0] == false  ) {
+//    waitcount++;
+//    endtime = millis();
+//  }
+
+//  for(int i = 0; i < 3; i++){
+//    if(echoReceived[i] == true){
+//      distance[i] = calculateDistance(i);
+//      echoReceived[i] = false;
+//    }
 //
-//  digitalWrite(in3, LOW);
-//  analogWrite(in4, 100);
+//    Serial.print("Distance from sensor ");
+//    Serial.print(i+9);
+//    Serial.print(": ");
+//    Serial.print(distance[i]);
+//    Serial.println(" cm");
+//  }
+    input = readEncoderCount();  // Đọc giá trị từ module H206
 
-  temp += analogRead(0);                              // increment position target with potentiometer value (speed), potmeter connected to A0
-  if (temp < 0) {                                     // in case of overflow
-    pulse = 0;
-    temp = 0;
-  }
-  setpoint = temp / 500;                              // modify division to fit motor and encoder characteristics
-  input = pulse ;                                // data from encoder
-  myPID.Compute();                                    // calculate new output
-  pwmOut(output);                                     // drive L298N H-Bridge module
-}
-void pwmOut(int out) {                                // to H-Bridge board
-  if (out > 0) {
-    analogWrite(in2, out);                             // drive motor CW        
-    analogWrite(in1, 0);                                              
-  }
-  else {
-    analogWrite(in2, 0);                         
-    analogWrite(in1, abs(out));                        // drive motor CCW
-  }
+    myPID.Compute();  // Tính toán tín hiệu điều khiển PID
 
-}
-
-
-void PID(){
-  speed = (pulse/1500)*(1/T)*60;
-  pulse = 0;
-  E = 500 - speed;
-  alpha = 2*T*Kp + Ki * T * T + 2*Kd;
-  beta = T*T*Ki - 4*Kd - 2*T*Kp;
-  gamma = 2 *Kd;
-  output = (alpha * E + beta * E1 + gamma * E2 +  2*T*lastoutput)/(2*T);
-  lastoutput = output;
-  E2 = E1;
-  E1 = E;
-  if(output > 255) output = 255;
-  if(output < 0) output = 0;
-}
-
-void updateEncoder() {
-  // read the current state of the encoder pins
-  boolean A_val = digitalRead(encoderA);
-  boolean B_val = digitalRead(encoderB);
-
-  // determine which direction the encoder is turning
-  if (A_val != A_set) {
-    encoderPos += (B_val != A_val) ? 1 : -1;
-  } else if (B_val != B_set) {
-    encoderPos += (A_val == B_val) ? 1 : -1;
-  }
+    // motor right
+//    digitalWrite(in1, HIGH);
+//    analogWrite(in2, 140);
   
-  // update the flags for the next interrupt
-  A_set = A_val;
-  B_set = B_val;
+    // motor left
+    if (output > 0) {
+//      digitalWrite(in3, HIGH);
+//      analogWrite(in4, 255 - output);
+    analogWrite(in4, output);  // Chiều thuận
+    } else {
+//      digitalWrite(in3, LOW);
+//      analogWrite(in4, -output);
+    analogWrite(in4, -output);  // Chiều ngược
+    }
+//    Serial.println(output);
+    
+
+//  motorRun(MOVEFORWARD);
+//  motorRun(TURNLEFT);
+//  delay(540); // 90 degree
+//  motorRun(TURNRIGHT);
+//  delay(580); // 90 degree
+//  motorRun(STOP);
+    
+//  readSensor();
+//  actionMotor();
+  
+//  delay(1000); 
+//  for(int i = 0; i < dodai; i++){
+//    Serial.print("Chay = ");
+//    Serial.print(mang[i]);
+//  }
+//  Serial.println("");
 }
 
 void readSensor(){
-      distance_head = getDistance(trig,echo1);
-      distance_left = getDistance(trig,echo2);
-      distance_right = getDistance(trig,echo3);
   
-      Serial.print("Sensor head: ");
-      Serial.print(distance_head);
-      Serial.println("cm");
-      Serial.print("Sensor left: ");
-      Serial.print(distance_left);
-      Serial.println("cm");  
-      Serial.print("Sensor right: ");
-      Serial.print(distance_right);
-      Serial.println("cm");     
+  distance_head = getDistance(trig,echo1);
+  delay(10);
+  distance_left = getDistance(trig,echo2);
+  delay(10);
+  distance_right = getDistance(trig,echo3);
+  delay(10);
+  
+//  Serial.print("Sensor head: ");
+//  Serial.print(distance_head);
+//  Serial.println("cm");
+//  Serial.print("Sensor left: ");
+//  Serial.print(distance_left);
+//  Serial.println("cm");  
+//  Serial.print("Sensor right: ");
+//  Serial.print(distance_right);
+//  Serial.println("cm"); 
 }
 
 void actionMotor(){
   /*Actions*/
-  distance_left = getDistance(trig,echo2);
-  distance_right = getDistance(trig,echo3);
-
-  if(distance_head < distance_limit){
-    stop_motor();
-    delay(1000);
+  if(distance_head < distance_limit + 2){
+    motorRun(STOP);
     // front and right => turn left
-    if(distance_left > distance_limit && distance_right < distance_limit){ 
-      turn_left();
-      delay(400); // 90 degree
+    if(distance_left > distance_limit && distance_right < distance_limit){
+      mang[idx] = TURNLEFT;
+      idx++;
+      dodai++;
+       
+      motorRun(TURNLEFT);
+      delay(540); // 90 degree
     } 
     // front and left => turn right
     else if(distance_right > distance_limit && distance_left < distance_limit){ 
-      turn_right();
-      delay(400); // 90 degree
+      mang[idx] = TURNRIGHT;
+      idx++;
+      dodai++;
+      
+      motorRun(TURNRIGHT);
+      delay(580); // 90 degree
     } 
     // all 3 sides
-    else if(distance_right < distance_limit && distance_left < distance_limit){
-        // more action
-        backward();
+    else if(distance_right < distance_limit - 3 && distance_left < distance_limit - 3){
+      mang[idx] = TURNBACK;
+      idx++;
+      dodai++;
+      // more action
+      motorRun(TURNBACK);
+      motorRun(STOP);
     }
     else {    
-      if(distance_left > distance_right){
-        turn_left();
-        delay(400); // 90 degree
+      if(refactor() && (distance_right > 2 * distance_limit &&  distance_left > 2 * distance_limit)){ // loop
+        int temp = mang[idx-2];
+        idx = idx - (4*2);
+        dodai = dodai - (4*2);
+        // select another way
+        if(temp == TURNLEFT){
+          mang[idx] = TURNRIGHT;
+          idx++;
+          dodai++;
+          motorRun(TURNRIGHT);
+          delay(580); // 90 degree
+        } else if(temp == TURNRIGHT){
+          mang[idx] = TURNLEFT;
+          idx++;
+          dodai++;
+          motorRun(TURNLEFT);
+          delay(540); // 90 degree
+        }
       } else {
-        turn_right();
-        delay(400); // 90 degree
-      }
-      stop_motor();
-      delay(1000);
+        if(distance_left > distance_right){
+          mang[idx] = TURNLEFT;
+          idx++;
+          dodai++;
+          motorRun(TURNLEFT);
+          delay(540); // 90 degree
+        } else if(distance_left < distance_right){
+          mang[idx] = TURNRIGHT;
+          idx++;
+          dodai++;
+          motorRun(TURNRIGHT);
+          delay(580); // 90 degree
+        }
+        motorRun(STOP);
+        }
     }
   } else {
-    if(distance_right < distance_limit && distance_left > distance_limit){
-        turn_left();
-        delay(25);
-    } else if(distance_left < distance_limit && distance_right > distance_limit){
-        turn_right();
-        delay(25);
+//    if(distance_left > distance_limit + 5 && distance_right < distance_limit){ // có ngã rẽ
+//      motorRun(STOP);
+//      mang[idx] = TURNLEFT;
+//      idx++;
+//      dodai++;
+//      motorRun(TURNLEFT);
+//      delay(560); // 90 degree
+//    } else if(distance_right > distance_limit + 5 && distance_left < distance_limit){
+//      motorRun(STOP);
+//      mang[idx] = TURNRIGHT;
+//      idx++;
+//      dodai++;
+//      motorRun(TURNRIGHT);
+//      delay(600); // 90 degree
+//    } else 
+    if(distance_right < 3 && distance_left > distance_right){
+      motorRun(TURNLEFT);
+      delay(25);
+    } else if(distance_left < 3 && distance_right > distance_left){
+      motorRun(TURNRIGHT);
+      delay(25);
     } else {
-      move_forward(); 
+      if(mang[idx-1] != MOVEFORWARD){
+        mang[idx] = MOVEFORWARD;
+        idx++;
+        dodai++;
+      }
+      motorRun(MOVEFORWARD); 
     }
   }
 }
 
-void move_forward(){
-  Serial.println("Move Forward");
-  // motor right
-//  analogWrite(in1, speed_motor_right);
-  digitalWrite(in1, HIGH);
-  digitalWrite(in2, LOW); 
-
-  // motor left
-  digitalWrite(in3, HIGH);
-  digitalWrite(in4, LOW);
+bool refactor(){
+  if(mang[idx-2] == mang[idx-4] && mang[idx-2] == mang[idx-6] && mang[idx-2] == mang[idx - 8]){
+    return true;
+  }
+  return false;
 }
 
-void turn_left(){
-  Serial.println("Turn left");
-  
-  digitalWrite(in1, HIGH);
-  digitalWrite(in2, LOW);
-
-  digitalWrite(in3, LOW);
-  digitalWrite(in4, HIGH);
-}
-
-void turn_right(){
-  Serial.println("Turn right");
-  
-  digitalWrite(in1, LOW);
-  digitalWrite(in2, HIGH);
-
-  digitalWrite(in3, HIGH);
-  digitalWrite(in4, LOW);
-}
-
-void stop_motor(){
-  Serial.println("Stop move");
-  digitalWrite(in1, LOW);
-  digitalWrite(in2, LOW);
-  digitalWrite(in3, LOW);
-  digitalWrite(in4, LOW);
-}
-
-void backward(){
-  Serial.println("Move Backward");
-  digitalWrite(in1, LOW);
-  digitalWrite(in2, HIGH);
-
-  digitalWrite(in3, HIGH);
-  digitalWrite(in4, LOW);
-  
-  delay(800); // turn 180 degree
+void motorRun(int action){
+  switch(action){
+    case 1: // forward
+//      Serial.println("MOVE FORWARD");
+      // motor right
+      digitalWrite(in1, HIGH);
+      analogWrite(in2, 140);
+    
+      // motor left
+      digitalWrite(in3, HIGH);
+      analogWrite(in4, 110);
+      break;
+    case 2: //turn left
+      Serial.println("TURN LEFT");
+      digitalWrite(in1, HIGH);
+      analogWrite(in2, 50);
+    
+      digitalWrite(in3, LOW);
+      analogWrite(in4, 200);
+      
+      break;
+    case 3: // turn right
+      Serial.println("TURN RIGHT");
+      digitalWrite(in1, LOW);
+      analogWrite(in2, 200);
+    
+      digitalWrite(in3, HIGH);
+      analogWrite(in4, 40);
+      
+      break;
+    case 4: // backward
+      Serial.println("Move Backward");
+      digitalWrite(in1, LOW);
+      digitalWrite(in2, HIGH);
+    
+      digitalWrite(in3, HIGH);
+      digitalWrite(in4, LOW);
+      delay(1050); // turn 180 degree
+      break;
+    default: // stop
+//      Serial.println("STOP");
+      digitalWrite(in1, LOW);
+      digitalWrite(in2, LOW);
+      digitalWrite(in3, LOW);
+      digitalWrite(in4, LOW);
+      delay(1000);
+      break;
+  }
 }
